@@ -9,8 +9,8 @@ PLATFORMS = android-arm \
 	windows-x64
 
 DOCKER = docker
-DOCKER_IMAGE = beermix/libtorrent-go
-GO_PACKAGE_NS = github.com/beermix
+DOCKER_IMAGE = anteo/libtorrent-go
+GO_PACKAGE_NS = github.com/anteo
 
 include platform_host.mk
 

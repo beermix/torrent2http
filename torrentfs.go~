@@ -10,7 +10,7 @@ import (
 	"errors"
 	"time"
 
-	lt "github.com/beermix/libtorrent-go"
+	lt "github.com/anteo/libtorrent-go"
 )
 
 type TorrentFS struct {

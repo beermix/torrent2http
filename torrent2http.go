@@ -406,6 +406,10 @@ func parseFlags() {
 	flag.BoolVar(&config.keepComplete, "keep-complete", false, "Keep complete files after exiting")
 	flag.BoolVar(&config.keepIncomplete, "keep-incomplete", false, "Keep incomplete files after exiting")
 	flag.BoolVar(&config.keepFiles, "keep-files", false, "Keep all files after exiting (incl. -keep-complete and -keep-incomplete)")
+	flag.BoolVar(&config.showAllStats, "show-stats", false, "Show all stats (incl. -overall-progress -files-progress -pieces-progress)")
+	flag.BoolVar(&config.showOverallProgress, "overall-progress", false, "Show overall progress")
+	flag.BoolVar(&config.showFilesProgress, "files-progress", false, "Show files progress")
+	flag.BoolVar(&config.showPiecesProgress, "pieces-progress", false, "Show pieces progress")
 	flag.BoolVar(&config.debugAlerts, "debug-alerts", false, "Show debug alert notifications")
 	flag.BoolVar(&config.exitOnFinish, "exit-on-finish", false, "Exit when download finished")
 
@@ -472,6 +476,20 @@ func inactiveAutoShutdown(connTrackChannel chan int) {
 	}
 }
 
+func getHandler(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		index, err := strconv.Atoi(r.URL.String())
+		if err == nil && torrentFS.HasTorrentInfo() {
+			file, err := torrentFS.FileAt(index)
+			if err == nil {
+				r.URL.Path = file.Name()
+				h.ServeHTTP(w, r)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	})
+}
 func startHTTP() {
 	log.Println("starting HTTP Server...")
 

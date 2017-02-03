@@ -5,15 +5,21 @@ import (
 	"io/ioutil"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
 	"net"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"strings"
 	"strconv"
@@ -132,18 +138,32 @@ type Config struct {
 	exitOnFinish			bool
 	dhtRouters              string
 	trackers                string
+	buffer              float64
+	tunedStorage        bool
 }
 
 const VERSION = "1.0.5"
 const USER_AGENT = "torrent2http/"+VERSION+" libtorrent/"+lt.LIBTORRENT_VERSION
 
+const (
+	startBufferPercent = 0.005
+	endBufferSize      = 10 * 1024 * 1024 // 10m
+	minCandidateSize   = 100 * 1024 * 1024
+	defaultDHTPort     = 6881
+)
+
 var (
 	config Config
+	packSettings             lt.SettingsPack
 	session lt.Session
 	torrentHandle lt.TorrentHandle
+	torrentInfo              lt.TorrentInfo
 	torrentFS *TorrentFS
 	forceShutdown chan bool
 	httpListener net.Listener
+fileEntryIdx             int
+	bufferPiecesProgressLock sync.RWMutex
+	bufferPiecesProgress     = make(map[int]float64)
 )
 
 const (
@@ -166,6 +186,28 @@ var stateStrings = map[int]string{
 	STATE_SEEDING: "seeding",
 	STATE_ALLOCATING: "allocating",
 	STATE_CHECKING_RESUME_DATA: "checking_resume_data",
+}
+
+const (
+	ERROR_NO_ERROR = iota
+	ERROR_EXPECTED_DIGID
+	ERROR_EXPECTED_COLON
+	ERROR_UNEXPECTED_EOF
+	ERROR_EXPECTED_VALUE
+	ERROR_DEPTH_EXCEEDED
+	ERROR_LIMIT_EXCEEDED
+	ERROR_OVERFLOW
+)
+
+var errorStrings = map[int]string{
+	ERROR_NO_ERROR:       "",
+	ERROR_EXPECTED_DIGID: "expected digit in bencoded string",
+	ERROR_EXPECTED_COLON: "expected colon in bencoded string",
+	ERROR_UNEXPECTED_EOF: "unexpected end of file in bencoded string",
+	ERROR_EXPECTED_VALUE: "expected value (list, dict, int or string) in bencoded string",
+	ERROR_DEPTH_EXCEEDED: "bencoded recursion depth limit exceeded",
+	ERROR_LIMIT_EXCEEDED: "bencoded item count limit exceeded",
+	ERROR_OVERFLOW:       "integer overflow",
 }
 
 func convertToUtf8(s string) (string) {
@@ -198,7 +240,7 @@ func statusHandler(w http.ResponseWriter, _ *http.Request) {
 			Name:          tstatus.GetName(),
 			State:         int(tstatus.GetState()),
 			StateStr:	   stateStrings[int(tstatus.GetState())],
-			Error:         tstatus.GetError(),
+			Error:         errorStrings[tstatus.GetErrc().Value()],
 			Progress:      tstatus.GetProgress(),
 			TotalDownload: tstatus.GetTotalDownload(),
 			TotalUpload:   tstatus.GetTotalUpload(),
@@ -504,6 +546,8 @@ func parseFlags() {
 	flag.BoolVar(&config.enableNATPMP, "enable-natpmp", true, "Enable NATPMP (NAT port-mapping)")
 	flag.BoolVar(&config.enableUTP, "enable-utp", true, "Enable uTP protocol")
 	flag.BoolVar(&config.enableTCP, "enable-tcp", true, "Enable TCP protocol")
+	flag.BoolVar(&config.tunedStorage, "tuned-storage", false, "Enable storage optimizations for Android external storage / OS-mounted NAS setups")
+	flag.Float64Var(&config.buffer, "buffer", startBufferPercent, "Buffer percentage from start of file")
 	flag.Parse()
 
 	if config.uri == "" {
@@ -516,7 +560,7 @@ func parseFlags() {
 	}
 }
 
-func NewConnectionCounterHandler(connTrackChannel chan int, handler http.Handler) http.Handler {
+func connectionCounterHandler(connTrackChannel chan int, handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		connTrackChannel <- 1
 		handler.ServeHTTP(w, r)
@@ -640,6 +684,14 @@ func consumeAlerts() {
 		if alert.What() == "save_resume_data_alert" {
 			processSaveResumeDataAlert(alert)
 		}
+func consumeAlerts() {
+	var alerts lt.StdVectorAlerts
+	alerts = session.GetHandle().PopAlerts()
+	queueSize := alerts.Size()
+	for i := 0; i < int(queueSize); i++ {
+		alert := alerts.Get(i)
+		logAlert(alert)
+		processAlert(alert)
 	}
 }
 
@@ -717,6 +769,7 @@ func startServices() {
 		log.Println("Starting NATPMP...")
 		session.StartNatpmp()
 	}
+	session.GetHandle().ApplySettings(packSettings)
 }
 
 func startSession() {
@@ -764,6 +817,9 @@ func startSession() {
 				session.LoadState(entry)
 			}
 		}
+	}
+	if config.userAgent != "" {
+		settings.SetStr(lt.SettingByName("user_agent"), config.userAgent)
 	}
 
 	err := lt.NewErrorCode()

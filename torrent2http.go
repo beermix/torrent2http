@@ -25,7 +25,7 @@ import (
 	"strconv"
 	"time"
 
-	lt "github.com/scakemyer/libtorrent-go"
+	lt "github.com/beermix/libtorrent-go"
 	"github.com/saintfish/chardet"
 	"golang.org/x/net/html/charset"
 	"golang.org/x/text/transform"

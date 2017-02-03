@@ -26,6 +26,9 @@ import (
 	"time"
 
 	lt "github.com/scakemyer/libtorrent-go"
+	"github.com/saintfish/chardet"
+	"golang.org/x/net/html/charset"
+	"golang.org/x/text/transform"
 )
 
 var dhtBootstrapNodes = []string{
@@ -317,38 +320,51 @@ func lsHandler(w http.ResponseWriter, _ *http.Request) {
 
 	retFiles := LsInfo{}
 
-	if torrentHandle.IsValid() && torrentInfo != nil {
-		if fileEntryIdx >= 0 && fileEntryIdx < torrentInfo.NumFiles() {
-			state := torrentHandle.Status().GetState()
-			bufferProgress := float64(0)
-			if state != STATE_CHECKING_FILES && state != STATE_QUEUED_FOR_CHECKING {
-				bufferPiecesProgressLock.Lock()
-				lenght := len(bufferPiecesProgress)
-				if lenght > 0 {
-					totalProgress := float64(0)
-					piecesProgress(bufferPiecesProgress)
-					for _, v := range bufferPiecesProgress {
-						totalProgress += v
+	if torrentFS.HasTorrentInfo() {
+		for _, file := range torrentFS.Files() {
+			url := url.URL{
+				Scheme:    "http",
+				Host:      config.bindAddress,
+				Path:      "/files/" + file.Name(),
 			}
-					bufferProgress = totalProgress / float64(lenght)
+			fi := FileStatusInfo{
+				Name:      file.Name(),
+				Size:      file.Size(),
+				Offset:    file.Offset(),
+				Download:  file.Downloaded(),
+				Progress:  file.Progress(),
+				SavePath:  file.SavePath(),
+				Url:       url.String(),
 			}
-				bufferPiecesProgressLock.Unlock()
+			retFiles.Files = append(retFiles.Files, fi)
+		}
 	}
 
-			files := torrentInfo.Files()
-			path, _ := filepath.Abs(path.Join(config.downloadPath, files.FilePath(fileEntryIdx)))
+	output, _ := json.Marshal(retFiles)
+	w.Write(output)
+}
 
-			url := url.URL{
-				Host:   config.bindAddress,
-				Path:   "/files/" + files.FilePath(fileEntryIdx),
-				Scheme: "http",
+func peersHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	ret := PeersInfo{}
+
+	vectorPeerInfo := lt.NewStdVectorPeerInfo()
+	torrentHandle.GetPeerInfo(vectorPeerInfo)
+	for i := 0; i < int(vectorPeerInfo.Size()); i++ {
+		peer := vectorPeerInfo.Get(i)
+		pi := PeerInfo{
+			Ip:              peer.Ip(),
+			Flags:           peer.GetFlags(),
+			Source:          peer.GetSource(),
+			UpSpeed:         float32(peer.GetUpSpeed())/1024,
+			DownSpeed:       float32(peer.GetDownSpeed())/1024,
+			TotalDownload:   peer.GetTotalDownload(),
+			TotalUpload:     peer.GetTotalUpload(),
+			Country:         peer.GetCountry(),
+			Client:          peer.GetClient(),
 		}
-			fsi := FileStatusInfo{
-				Buffer:   bufferProgress,
-				Name:     files.FilePath(fileEntryIdx),
-				Size:     files.FileSize(fileEntryIdx),
-				SavePath: path,
-				URL:      url.String(),
+		ret.Peers = append(ret.Peers, pi)
 	}
 
 	output, _ := json.Marshal(ret)
@@ -711,7 +727,7 @@ func buildTorrentParams(uri string) lt.AddTorrentParams {
 		if err != nil {
 			log.Fatalf(err.Error())
 		}
-		log.Printf("opening local file: %s", absPath)
+		log.Printf("Opening local file: %s", absPath)
 		if _, err := os.Stat(absPath); err != nil {
 			log.Fatalf(err.Error())
 		}

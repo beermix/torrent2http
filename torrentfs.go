@@ -1,24 +1,14 @@
 package main
 
 import (
-	"encoding/json"
-	"io/ioutil"
-	"flag"
-	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
-	"net/url"
 	"os"
-	"net"
-	"os/signal"
+	"io"
+	"path"
 	"path/filepath"
-	"runtime"
-	"syscall"
-	"strings"
-	"strconv"
-	"time"
 	"errors"
+	"time"
 
 	lt "github.com/beermix/libtorrent-go"
 )
